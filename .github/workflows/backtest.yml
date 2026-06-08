@@ -1,0 +1,53 @@
+name: Overnight Intraday Backtest
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * 1"
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Cache market data
+        uses: actions/cache@v4
+        with:
+          path: data/
+          key: market-data-${{ runner.os }}-${{ hashFiles('config/*.csv', 'config/config.yaml') }}
+          restore-keys: |
+            market-data-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: pytest
+
+      - name: Run quick smoke test
+        run: python -m src.main --market all --quick
+
+      - name: Run full backtest
+        run: python -m src.main --market all --start 2000-01-01 --end today
+
+      - name: Upload reports artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: overnight-intraday-reports
+          path: reports/
+          if-no-files-found: warn
