@@ -1,0 +1,9 @@
+market,symbol,name,asset_type
+CN,sh.000001,上证指数,index
+CN,sz.399001,深证成指,index
+CN,sz.399006,创业板指,index
+CN,sh.600519,贵州茅台,stock
+CN,sh.601318,中国平安,stock
+CN,sh.600036,招商银行,stock
+CN,sh.601398,工商银行,stock
+CN,sz.000858,五粮液,stock
