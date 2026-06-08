@@ -1,0 +1,10 @@
+pandas
+numpy
+scipy
+matplotlib
+pyyaml
+requests
+baostock
+pyarrow
+pytest
+tqdm
