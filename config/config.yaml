@@ -1,0 +1,28 @@
+markets:
+  us:
+    trading_days: 252
+    default_start: "2000-01-01"
+    source: "twelve_data"
+    request_interval_seconds: 8
+    max_retries: 3
+    retry_backoff_seconds: 2
+  cn:
+    trading_days: 244
+    default_start: "2005-01-01"
+    source: "baostock"
+    # baostock adjustflag: 1=后复权, 2=前复权, 3=不复权
+    adjustflag: "3"
+
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+
+reports:
+  output_dir: "reports"
+  figures_dir: "reports/figures"
+
+analysis:
+  bootstrap_samples: 10000
+  bootstrap_seed: 42
+  quick_years: 3
+  quick_symbol_count: 3
