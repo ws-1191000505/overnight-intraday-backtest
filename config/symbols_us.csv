@@ -1,0 +1,11 @@
+market,symbol,name,asset_type
+US,SPY,SPDR S&P 500 ETF Trust,ETF
+US,QQQ,Invesco QQQ Trust,ETF
+US,DIA,SPDR Dow Jones Industrial Average ETF Trust,ETF
+US,IWM,iShares Russell 2000 ETF,ETF
+US,AAPL,Apple Inc.,stock
+US,MSFT,Microsoft Corporation,stock
+US,NVDA,NVIDIA Corporation,stock
+US,AMZN,Amazon.com Inc.,stock
+US,META,Meta Platforms Inc.,stock
+US,GOOGL,Alphabet Inc. Class A,stock
