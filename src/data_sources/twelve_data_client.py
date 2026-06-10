@@ -11,6 +11,22 @@ import pandas as pd
 LOGGER = logging.getLogger(__name__)
 
 
+def _is_no_data_error(message: str) -> bool:
+    text = message.lower()
+    no_data_markers = [
+        "no data",
+        "not available",
+        "specified dates",
+        "no values",
+        "no price",
+        "market is closed",
+    ]
+    credential_markers = ["api key", "apikey", "unauthorized", "invalid key"]
+    return any(marker in text for marker in no_data_markers) and not any(
+        marker in text for marker in credential_markers
+    )
+
+
 @dataclass
 class TwelveDataClient:
     api_key: str | None = None
@@ -65,10 +81,37 @@ class TwelveDataClient:
                 self._rate_limit()
                 response = requests.get(self.base_url, params=params, timeout=30)
                 self._last_request_at = time.time()
+
+                payload: dict[str, Any] = {}
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = {}
+
+                if response.status_code == 400:
+                    message = str(payload.get("message", response.text))
+                    if _is_no_data_error(message):
+                        LOGGER.warning(
+                            "%s: Twelve Data returned no data for %s to %s: %s",
+                            symbol,
+                            start,
+                            end,
+                            message,
+                        )
+                        return pd.DataFrame()
+
                 response.raise_for_status()
-                payload = response.json()
                 if payload.get("status") == "error":
                     message = payload.get("message", f"Twelve Data error for {symbol}")
+                    if _is_no_data_error(str(message)):
+                        LOGGER.warning(
+                            "%s: Twelve Data returned no data for %s to %s: %s",
+                            symbol,
+                            start,
+                            end,
+                            message,
+                        )
+                        return pd.DataFrame()
                     if "limit" in str(message).lower() or "too many" in str(message).lower():
                         time.sleep(self.request_interval_seconds * 2)
                     raise RuntimeError(message)
