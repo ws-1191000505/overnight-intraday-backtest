@@ -16,6 +16,7 @@ markets:
     source: "baostock"
     # baostock adjustflag: 1=后复权, 2=前复权, 3=不复权
     adjustflag: "3"
+    qfq_adjustflag: "2"
 
 data:
   raw_dir: "data/raw"
