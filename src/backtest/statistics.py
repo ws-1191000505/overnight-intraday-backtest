@@ -80,6 +80,24 @@ def welch_ttest_overnight_vs_intraday(df: pd.DataFrame) -> dict[str, float]:
     return {"statistic": float(result.statistic), "p_value": float(result.pvalue)}
 
 
+def welch_ttest_intraday_vs_overnight(df: pd.DataFrame) -> dict[str, float]:
+    overnight = _clean_returns(df["overnight_return"])
+    intraday = _clean_returns(df["intraday_return"])
+    if len(overnight) < 2 or len(intraday) < 2:
+        return {"statistic": np.nan, "p_value": np.nan}
+    if stats is None:
+        n1, n2 = len(intraday), len(overnight)
+        v1, v2 = intraday.var(ddof=1), overnight.var(ddof=1)
+        se = math.sqrt(v1 / n1 + v2 / n2)
+        if se == 0:
+            return {"statistic": np.nan, "p_value": np.nan}
+        statistic = float((intraday.mean() - overnight.mean()) / se)
+        p_value = 0.5 * math.erfc(statistic / math.sqrt(2))
+        return {"statistic": statistic, "p_value": float(p_value)}
+    result = stats.ttest_ind(intraday, overnight, equal_var=False, alternative="greater")
+    return {"statistic": float(result.statistic), "p_value": float(result.pvalue)}
+
+
 def mann_whitney_overnight_vs_intraday(df: pd.DataFrame) -> dict[str, float]:
     overnight = _clean_returns(df["overnight_return"])
     intraday = _clean_returns(df["intraday_return"])
@@ -132,6 +150,7 @@ def summarize_symbol(
     close_total = float(np.exp(_clean_returns(data["close_to_close_return"]).sum()) - 1)
 
     ttest = welch_ttest_overnight_vs_intraday(data)
+    reverse_ttest = welch_ttest_intraday_vs_overnight(data)
     bootstrap = bootstrap_mean_diff(data, n_bootstrap=n_bootstrap, seed=seed)
     mann_whitney = mann_whitney_overnight_vs_intraday(data)
 
@@ -157,6 +176,8 @@ def summarize_symbol(
         "mean_diff": float(_clean_returns(data["overnight_return"]).mean() - _clean_returns(data["intraday_return"]).mean()),
         "welch_t_statistic": ttest["statistic"],
         "p_value": ttest["p_value"],
+        "welch_t_statistic_intraday_gt_overnight": reverse_ttest["statistic"],
+        "p_value_intraday_gt_overnight": reverse_ttest["p_value"],
         "mann_whitney_statistic": mann_whitney["statistic"],
         "mann_whitney_p_value": mann_whitney["p_value"],
         "max_drawdown": max_drawdown(data["close_to_close_cum_return"]),
