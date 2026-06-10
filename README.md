@@ -42,9 +42,10 @@ A 股复权参数位于 `config/config.yaml`：
 markets:
   cn:
     adjustflag: "3"
+    qfq_adjustflag: "2"
 ```
 
-baostock 口径：`1=后复权`，`2=前复权`，`3=不复权`。默认使用不复权价格验证真实可交易价格。
+baostock 口径：`1=后复权`，`2=前复权`，`3=不复权`。默认使用不复权价格验证真实可交易价格，并同时运行一组前复权对照，输出为 `CN_QFQ`。
 
 ## 本地运行
 
@@ -110,8 +111,10 @@ quick 模式只使用少量标的和最近三年数据，适合 GitHub Actions s
 
 - `summary_us.csv`
 - `summary_cn.csv`
+- `summary_cn_qfq.csv`
 - `portfolio_summary_us.csv`
 - `portfolio_summary_cn.csv`
+- `portfolio_summary_cn_qfq.csv`
 - `by_year_summary.csv`
 - `rolling_3y_summary.csv`
 - `rolling_5y_summary.csv`
@@ -194,6 +197,11 @@ market,symbol,name,asset_type
 - 5 年滚动统计
 
 如果样本不足、p-value 不显著或数据质量不足，报告会直接写明：当前数据不足以推断隔夜收益显著高于日内收益。
+
+报告结论同时要求均值差方向、Welch 单侧检验和 bootstrap 置信区间一致：
+
+- 隔夜显著强于日内：`overnight_mean - intraday_mean > 0`、`p(隔夜>日内) < 0.05`、`bootstrap_ci_low > 0`。
+- 隔夜弱、日内强：`overnight_mean - intraday_mean < 0`、`p(日内>隔夜) < 0.05`、`bootstrap_ci_high < 0`。
 
 ## 为什么没有直接使用现成回测框架？
 
