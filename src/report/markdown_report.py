@@ -12,6 +12,27 @@ def _fmt_pct(value: Any) -> str:
     return f"{float(value):.2%}"
 
 
+def _fmt_float(value: Any, digits: int = 6) -> str:
+    if pd.isna(value):
+        return "N/A"
+    return f"{float(value):.{digits}f}"
+
+
+def _fmt_p(value: Any) -> str:
+    if pd.isna(value):
+        return "N/A"
+    return f"{float(value):.4g}"
+
+
+def _market_label(market: str) -> str:
+    labels = {
+        "us": "US",
+        "cn": "CN 不复权",
+        "cn_qfq": "CN 前复权",
+    }
+    return labels.get(market.lower(), market.upper())
+
+
 def _market_result(summary: pd.DataFrame, market: str) -> str:
     if summary.empty:
         return "当前没有可用结果。\n"
@@ -24,38 +45,74 @@ def _market_result(summary: pd.DataFrame, market: str) -> str:
         "intraday_annual_return",
         "mean_diff",
         "p_value",
+        "p_value_intraday_gt_overnight",
+        "bootstrap_ci_low",
+        "bootstrap_ci_high",
     ]
     for _, row in summary[display_cols].iterrows():
         rows.append(
-            "| {symbol} | {asset_type} | {days} | {overnight} | {intraday} | {diff:.6f} | {p_value:.4g} |".format(
+            "| {symbol} | {asset_type} | {days} | {overnight} | {intraday} | {diff} | {p_gt} | {p_lt} | [{ci_low}, {ci_high}] |".format(
                 symbol=row["symbol"],
                 asset_type=row["asset_type"],
                 days=int(row["sample_trading_days"]),
                 overnight=_fmt_pct(row["overnight_annual_return"]),
                 intraday=_fmt_pct(row["intraday_annual_return"]),
-                diff=row["mean_diff"],
-                p_value=row["p_value"] if pd.notna(row["p_value"]) else float("nan"),
+                diff=_fmt_float(row["mean_diff"]),
+                p_gt=_fmt_p(row["p_value"]),
+                p_lt=_fmt_p(row["p_value_intraday_gt_overnight"]),
+                ci_low=_fmt_float(row["bootstrap_ci_low"]),
+                ci_high=_fmt_float(row["bootstrap_ci_high"]),
             )
         )
     table = "\n".join(rows)
     return (
-        "| 标的 | 类型 | 样本交易日 | 隔夜年化收益 | 日内年化收益 | 均值差 | Welch p-value |\n"
-        "|---|---:|---:|---:|---:|---:|---:|\n"
+        "| 标的 | 类型 | 样本交易日 | 隔夜年化收益 | 日内年化收益 | 均值差 | p(隔夜>日内) | p(日内>隔夜) | bootstrap CI |\n"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|\n"
         f"{table}\n"
     )
 
 
 def _conclusion_for_market(summary: pd.DataFrame, market: str) -> str:
     if summary.empty:
-        return f"- {market.upper()}：当前没有可用样本。"
+        return f"- {_market_label(market)}：当前没有可用样本。"
     enough = summary["sample_trading_days"].fillna(0) >= 60
-    significant = summary["p_value"].fillna(1) < 0.05
-    positive = summary["mean_diff"].fillna(-1) > 0
-    count = int((enough & significant & positive).sum())
+    overnight_strong = (
+        enough
+        & (summary["mean_diff"].fillna(0) > 0)
+        & (summary["p_value"].fillna(1) < 0.05)
+        & (summary["bootstrap_ci_low"].fillna(-1) > 0)
+    )
+    intraday_strong = (
+        enough
+        & (summary["mean_diff"].fillna(0) < 0)
+        & (summary["p_value_intraday_gt_overnight"].fillna(1) < 0.05)
+        & (summary["bootstrap_ci_high"].fillna(1) < 0)
+    )
+    overnight_count = int(overnight_strong.sum())
+    intraday_count = int(intraday_strong.sum())
     total = int(len(summary))
-    if count == 0:
-        return f"- {market.upper()}：当前数据不足以推断隔夜收益显著高于日内收益。"
-    return f"- {market.upper()}：{count}/{total} 个标的在 Welch 单侧检验下呈现隔夜均值显著高于日内均值。"
+    if overnight_count:
+        return (
+            f"- {_market_label(market)}：{overnight_count}/{total} 个标的同时满足均值差为正、"
+            "Welch 单侧 p-value < 0.05、bootstrap CI 下沿 > 0，呈现隔夜显著强于日内。"
+        )
+    if intraday_count:
+        return (
+            f"- {_market_label(market)}：{intraday_count}/{total} 个标的同时满足均值差为负、"
+            "日内强于隔夜的 Welch 单侧 p-value < 0.05、bootstrap CI 上沿 < 0，呈现隔夜弱、日内强。"
+        )
+    return f"- {_market_label(market)}：当前数据不足以推断隔夜收益显著高于日内收益，也不足以稳定推断反向特征。"
+
+
+def _relative_figure_lines(figures: list[Path], report_path: Path) -> str:
+    lines = []
+    for fig in figures:
+        try:
+            display = fig.resolve().relative_to(report_path.parent.resolve()).as_posix()
+        except ValueError:
+            display = fig.name
+        lines.append(f"- `{display}`")
+    return "\n".join(lines) or "- 暂无图表输出。"
 
 
 def write_report(
@@ -83,9 +140,13 @@ def write_report(
         symbol_count = int(combined["symbol"].nunique())
 
     cn_adjustflag = config["markets"]["cn"].get("adjustflag", "3")
+    cn_qfq_adjustflag = config["markets"]["cn"].get("qfq_adjustflag", "2")
     adjust_text = {"1": "后复权", "2": "前复权", "3": "不复权"}.get(str(cn_adjustflag), str(cn_adjustflag))
+    qfq_adjust_text = {"1": "后复权", "2": "前复权", "3": "不复权"}.get(
+        str(cn_qfq_adjustflag), str(cn_qfq_adjustflag)
+    )
 
-    figure_lines = "\n".join(f"- `{fig.as_posix()}`" for fig in figures) or "- 暂无图表输出。"
+    figure_lines = _relative_figure_lines(figures, path)
     issue_lines = "\n".join(f"- {item}" for item in validation_issues[:50]) or "- 未记录到数据质量剔除项。"
 
     portfolio_lines = []
@@ -95,9 +156,11 @@ def write_report(
             continue
         row = df.iloc[0]
         portfolio_lines.append(
-            f"- {market.upper()} 等权组合：隔夜年化 {_fmt_pct(row['overnight_annual_return'])}，"
+            f"- {_market_label(market)} 等权组合：隔夜年化 {_fmt_pct(row['overnight_annual_return'])}，"
             f"日内年化 {_fmt_pct(row['intraday_annual_return'])}，"
-            f"Welch p-value {row['p_value']:.4g}。"
+            f"p(隔夜>日内) {_fmt_p(row['p_value'])}，"
+            f"p(日内>隔夜) {_fmt_p(row.get('p_value_intraday_gt_overnight'))}，"
+            f"bootstrap CI [{_fmt_float(row['bootstrap_ci_low'])}, {_fmt_float(row['bootstrap_ci_high'])}]。"
         )
 
     text = f"""# 隔夜收益 / 日内收益回测统计报告
@@ -107,7 +170,8 @@ def write_report(
 - 美国市场：Twelve Data API，API Key 通过环境变量 `TWELVE_DATA_API_KEY` 读取，代码和配置文件不保存密钥。
 - 中国 A 股市场：baostock，不需要 API Key。
 - 标准字段：`date, market, symbol, name, open, high, low, close, volume, source`。
-- A 股复权口径：当前配置 `adjustflag={cn_adjustflag}`，含义为{adjust_text}。
+- A 股主口径：`adjustflag={cn_adjustflag}`，含义为{adjust_text}。
+- A 股前复权对照：`qfq_adjustflag={cn_qfq_adjustflag}`，含义为{qfq_adjust_text}。
 
 ## 回测口径
 
@@ -128,9 +192,10 @@ def write_report(
 事实：
 {_conclusion_for_market(summaries.get('us', pd.DataFrame()), 'us')}
 {_conclusion_for_market(summaries.get('cn', pd.DataFrame()), 'cn')}
+{_conclusion_for_market(summaries.get('cn_qfq', pd.DataFrame()), 'cn_qfq')}
 
 判断：
-- 是否能推断“隔夜收益显著高于日内收益”，以每个标的和市场等权组合的均值差、Welch 单侧 t-test、bootstrap 置信区间共同判断。
+- 是否能推断“隔夜收益显著高于日内收益”或“隔夜弱、日内强”，以每个标的和市场等权组合的均值差、对应方向 Welch 单侧 t-test、bootstrap 置信区间共同判断。
 - 指数和个股分开统计，不把指数结果和个股结果混成一个结论。
 
 假设：
@@ -144,14 +209,20 @@ def write_report(
 
 {_market_result(summaries.get('cn', pd.DataFrame()), 'cn')}
 
+## 中国市场前复权对照
+
+{_market_result(summaries.get('cn_qfq', pd.DataFrame()), 'cn_qfq')}
+
 ## 市场组合结果
 
 {chr(10).join(portfolio_lines) if portfolio_lines else "- 暂无组合结果。"}
 
 ## 隔夜收益是否显著高于日内收益
 
-- 当样本不足、p-value 不显著、bootstrap 置信区间未稳定大于 0，或数据质量不足时，结论应为：当前数据不足以推断隔夜收益显著高于日内收益。
-- 本报告默认使用 Welch 单侧 t-test 检验 `overnight_mean > intraday_mean`，同时输出 Mann-Whitney U test 和 bootstrap 均值差置信区间。
+- 当样本不足、对应方向 p-value 不显著、bootstrap 置信区间未稳定穿过指定方向，或数据质量不足时，结论应保持保守。
+- 隔夜显著强于日内：要求 `overnight_mean - intraday_mean > 0`、`p(隔夜>日内) < 0.05`、`bootstrap_ci_low > 0`。
+- 隔夜弱、日内强：要求 `overnight_mean - intraday_mean < 0`、`p(日内>隔夜) < 0.05`、`bootstrap_ci_high < 0`。
+- 本报告默认使用 Welch 单侧 t-test，同时输出 Mann-Whitney U test 和 bootstrap 均值差置信区间。
 
 ## 稳健性检验
 
