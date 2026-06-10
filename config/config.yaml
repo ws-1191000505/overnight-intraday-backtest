@@ -3,7 +3,11 @@ markets:
     trading_days: 252
     default_start: "2000-01-01"
     source: "twelve_data"
+    # Twelve Data free tier: minutely maximum 8 requests.
+    # Effective interval is max(request_interval_seconds, 60 / minutely_limit + safety_seconds).
+    minutely_limit: 8
     request_interval_seconds: 8
+    rate_limit_safety_seconds: 0.75
     max_retries: 3
     retry_backoff_seconds: 2
   cn:
