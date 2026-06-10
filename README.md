@@ -24,6 +24,18 @@ close_to_close_return_t ~= overnight_return_t + intraday_return_t
 - 中国 A 股市场：baostock，不需要 API Key。
 - 标准字段：`date, market, symbol, name, open, high, low, close, volume, source`。
 
+Twelve Data 免费层可能限制为每分钟最多 8 次请求。项目在 `config/config.yaml` 中显式配置：
+
+```yaml
+markets:
+  us:
+    minutely_limit: 8
+    request_interval_seconds: 8
+    rate_limit_safety_seconds: 0.75
+```
+
+实际请求间隔会自动取 `max(request_interval_seconds, 60 / minutely_limit + rate_limit_safety_seconds)`。按默认值计算，实际间隔约为 8.25 秒/次，用于避免 GitHub Actions 中因为网络抖动贴近 8 次/分钟上限。
+
 A 股复权参数位于 `config/config.yaml`：
 
 ```yaml
