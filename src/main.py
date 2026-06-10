@@ -107,6 +107,8 @@ def process_market(
     if market == "us" and not args.use_cache:
         us_client = TwelveDataClient(
             request_interval_seconds=float(market_cfg.get("request_interval_seconds", 8)),
+            minutely_limit=int(market_cfg.get("minutely_limit", 8)),
+            rate_limit_safety_seconds=float(market_cfg.get("rate_limit_safety_seconds", 0.75)),
             max_retries=int(market_cfg.get("max_retries", 3)),
             retry_backoff_seconds=float(market_cfg.get("retry_backoff_seconds", 2)),
         )
