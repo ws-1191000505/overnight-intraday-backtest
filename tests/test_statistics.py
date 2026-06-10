@@ -6,6 +6,8 @@ from src.backtest.statistics import (
     annualized_volatility,
     max_drawdown,
     sharpe_ratio,
+    summarize_symbol,
+    welch_ttest_intraday_vs_overnight,
     welch_ttest_overnight_vs_intraday,
 )
 
@@ -38,3 +40,34 @@ def test_ttest_output_contains_statistic_and_p_value() -> None:
     result = welch_ttest_overnight_vs_intraday(df)
     assert {"statistic", "p_value"}.issubset(result)
     assert result["p_value"] < 0.05
+
+
+def test_reverse_ttest_detects_intraday_stronger() -> None:
+    df = pd.DataFrame(
+        {
+            "overnight_return": [-0.01, -0.005, 0.0, -0.002],
+            "intraday_return": [0.01, 0.02, 0.015, 0.018],
+        }
+    )
+    result = welch_ttest_intraday_vs_overnight(df)
+    assert {"statistic", "p_value"}.issubset(result)
+    assert result["p_value"] < 0.05
+
+
+def test_summary_contains_reverse_ttest_fields() -> None:
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=4),
+            "market": ["CN"] * 4,
+            "symbol": ["TEST"] * 4,
+            "name": ["Test"] * 4,
+            "asset_type": ["stock"] * 4,
+            "overnight_return": [-0.01, -0.005, 0.0, -0.002],
+            "intraday_return": [0.01, 0.02, 0.015, 0.018],
+            "close_to_close_return": [0.0, 0.015, 0.015, 0.016],
+            "close_to_close_cum_return": [0.0, 0.015, 0.03, 0.046],
+        }
+    )
+    summary = summarize_symbol(df, n_bootstrap=100)
+    assert "p_value_intraday_gt_overnight" in summary
+    assert summary["mean_diff"] < 0
