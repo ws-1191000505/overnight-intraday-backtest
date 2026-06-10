@@ -56,6 +56,7 @@ def fetch_symbol_data(
     config: dict,
     existing_raw: pd.DataFrame,
     refresh: bool,
+    result_market: str,
     us_client: TwelveDataClient | None,
     cn_client: BaoStockClient | None,
 ) -> pd.DataFrame:
@@ -76,7 +77,7 @@ def fetch_symbol_data(
         raw = cn_client.fetch_daily(symbol, fetch_start, end)
         source = "baostock"
 
-    return normalize_ohlcv(raw, market=market, symbol=symbol, name=name, source=source)
+    return normalize_ohlcv(raw, market=result_market, symbol=symbol, name=name, source=source)
 
 
 def process_market(
@@ -84,8 +85,15 @@ def process_market(
     *,
     args: argparse.Namespace,
     config: dict,
+    result_market: str | None = None,
+    symbol_market: str | None = None,
+    cache_market: str | None = None,
+    cn_adjustflag: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
     market_cfg = config["markets"][market]
+    result_market = result_market or market.upper()
+    symbol_market = symbol_market or market
+    cache_market = cache_market or result_market.lower()
     raw_dir = config["data"]["raw_dir"]
     processed_dir = config["data"]["processed_dir"]
     end = normalize_end_date(args.end)
@@ -100,7 +108,7 @@ def process_market(
             end_ts - pd.DateOffset(years=int(config["analysis"].get("quick_years", 3))),
         ).strftime("%Y-%m-%d")
 
-    symbols = load_symbols(market)
+    symbols = load_symbols(symbol_market)
     if args.quick:
         symbols = symbols.head(int(config["analysis"].get("quick_symbol_count", 3)))
 
@@ -115,7 +123,7 @@ def process_market(
             retry_backoff_seconds=float(market_cfg.get("retry_backoff_seconds", 2)),
         )
     if market == "cn" and not args.use_cache:
-        cn_client = BaoStockClient(adjustflag=str(market_cfg.get("adjustflag", "3")))
+        cn_client = BaoStockClient(adjustflag=str(cn_adjustflag or market_cfg.get("adjustflag", "3")))
 
     processed_frames: list[pd.DataFrame] = []
     summary_rows: list[dict] = []
@@ -132,14 +140,14 @@ def process_market(
             name = str(row.name)
             asset_type = str(row.asset_type)
 
-            processed_cached = read_cached_csv(processed_dir, market, symbol)
+            processed_cached = read_cached_csv(processed_dir, cache_market, symbol)
             if args.use_cache and not processed_cached.empty:
                 processed_cached["asset_type"] = processed_cached.get("asset_type", asset_type)
                 processed_frames.append(processed_cached)
                 summary_rows.append(summarize_symbol(processed_cached, trading_days, n_bootstrap, seed))
                 continue
 
-            existing_raw = pd.DataFrame() if args.refresh else read_cached_csv(raw_dir, market, symbol)
+            existing_raw = pd.DataFrame() if args.refresh else read_cached_csv(raw_dir, cache_market, symbol)
             incoming = pd.DataFrame()
             if not args.use_cache:
                 incoming = fetch_symbol_data(
@@ -151,6 +159,7 @@ def process_market(
                     config=config,
                     existing_raw=existing_raw,
                     refresh=args.refresh,
+                    result_market=result_market,
                     us_client=us_client,
                     cn_client=cn_client,
                 )
@@ -162,7 +171,7 @@ def process_market(
             if raw_merged.empty:
                 LOGGER.warning("%s %s: no data after cache/fetch merge", market.upper(), symbol)
                 continue
-            write_cached_csv(raw_merged, raw_dir, market, symbol)
+            write_cached_csv(raw_merged, raw_dir, cache_market, symbol)
 
             validation = validate_ohlcv(raw_merged, symbol)
             validation_issues.extend(validation.issues)
@@ -174,7 +183,7 @@ def process_market(
             returns = compute_cumulative_returns(returns)
             validate_return_identity(returns)
             returns["asset_type"] = asset_type
-            write_cached_csv(returns, processed_dir, market, symbol)
+            write_cached_csv(returns, processed_dir, cache_market, symbol)
             processed_frames.append(returns)
             summary_rows.append(summarize_symbol(returns, trading_days, n_bootstrap, seed))
     finally:
@@ -183,9 +192,9 @@ def process_market(
 
     market_data = pd.concat(processed_frames, ignore_index=True) if processed_frames else pd.DataFrame()
     summary = pd.DataFrame([row for row in summary_rows if row])
-    portfolio_curve = build_equal_weight_portfolio(market_data, market) if not market_data.empty else pd.DataFrame()
+    portfolio_curve = build_equal_weight_portfolio(market_data, result_market) if not market_data.empty else pd.DataFrame()
     portfolio_summary = pd.DataFrame(
-        [summarize_portfolio(market_data, market, trading_days, n_bootstrap, seed)]
+        [summarize_portfolio(market_data, result_market, trading_days, n_bootstrap, seed)]
     ).dropna(how="all")
 
     return market_data, summary, portfolio_curve, validation_issues
@@ -221,6 +230,7 @@ def write_outputs(
     trading_days_by_market = {
         "us": int(config["markets"]["us"].get("trading_days", 252)),
         "cn": int(config["markets"]["cn"].get("trading_days", 244)),
+        "cn_qfq": int(config["markets"]["cn"].get("trading_days", 244)),
     }
     rolling_bootstrap = min(int(config["analysis"].get("bootstrap_samples", 10000)), 2000)
     seed = int(config["analysis"].get("bootstrap_seed", 42))
@@ -258,19 +268,63 @@ def main() -> None:
     portfolio_summaries: dict[str, pd.DataFrame] = {}
     validation_issues: list[str] = []
 
+    market_jobs: list[dict[str, str]] = []
     for market in selected_markets(args.market):
-        LOGGER.info("Processing %s market", market.upper())
-        data, summary, portfolio_curve, issues = process_market(market, args=args, config=config)
-        market_data[market] = data
-        summaries[market] = summary
-        portfolio_curves[market] = portfolio_curve
+        if market == "cn":
+            cn_cfg = config["markets"]["cn"]
+            market_jobs.append(
+                {
+                    "market": "cn",
+                    "result_market": "CN",
+                    "symbol_market": "cn",
+                    "cache_market": "cn",
+                    "cn_adjustflag": str(cn_cfg.get("adjustflag", "3")),
+                }
+            )
+            if str(cn_cfg.get("qfq_adjustflag", "2")):
+                market_jobs.append(
+                    {
+                        "market": "cn",
+                        "result_market": "CN_QFQ",
+                        "symbol_market": "cn",
+                        "cache_market": "cn_qfq",
+                        "cn_adjustflag": str(cn_cfg.get("qfq_adjustflag", "2")),
+                    }
+                )
+        else:
+            market_jobs.append(
+                {
+                    "market": market,
+                    "result_market": market.upper(),
+                    "symbol_market": market,
+                    "cache_market": market,
+                    "cn_adjustflag": "",
+                }
+            )
+
+    for job in market_jobs:
+        market = job["market"]
+        result_key = job["result_market"].lower()
+        LOGGER.info("Processing %s market", job["result_market"])
+        data, summary, portfolio_curve, issues = process_market(
+            market,
+            args=args,
+            config=config,
+            result_market=job["result_market"],
+            symbol_market=job["symbol_market"],
+            cache_market=job["cache_market"],
+            cn_adjustflag=job["cn_adjustflag"] or None,
+        )
+        market_data[result_key] = data
+        summaries[result_key] = summary
+        portfolio_curves[result_key] = portfolio_curve
         if not data.empty:
             trading_days = int(config["markets"][market].get("trading_days", 252))
-            portfolio_summaries[market] = pd.DataFrame(
+            portfolio_summaries[result_key] = pd.DataFrame(
                 [
                     summarize_portfolio(
                         data,
-                        market,
+                        job["result_market"],
                         trading_days,
                         min(int(config["analysis"].get("bootstrap_samples", 10000)), 1000 if args.quick else 10000),
                         int(config["analysis"].get("bootstrap_seed", 42)),
@@ -278,7 +332,7 @@ def main() -> None:
                 ]
             ).dropna(how="all")
         else:
-            portfolio_summaries[market] = pd.DataFrame()
+            portfolio_summaries[result_key] = pd.DataFrame()
         validation_issues.extend(issues)
 
     write_outputs(
