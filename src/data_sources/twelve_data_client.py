@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
-import requests
 
 LOGGER = logging.getLogger(__name__)
 
@@ -16,13 +15,27 @@ LOGGER = logging.getLogger(__name__)
 class TwelveDataClient:
     api_key: str | None = None
     request_interval_seconds: float = 8.0
+    minutely_limit: int | None = 8
+    rate_limit_safety_seconds: float = 0.75
     max_retries: int = 3
     retry_backoff_seconds: float = 2.0
     base_url: str = "https://api.twelvedata.com/time_series"
 
     def __post_init__(self) -> None:
         self.api_key = self.api_key or os.getenv("TWELVE_DATA_API_KEY")
+        self.request_interval_seconds = self._effective_request_interval()
         self._last_request_at = 0.0
+        LOGGER.info(
+            "Twelve Data rate limit interval set to %.2f seconds per request",
+            self.request_interval_seconds,
+        )
+
+    def _effective_request_interval(self) -> float:
+        configured_interval = float(self.request_interval_seconds)
+        if not self.minutely_limit or self.minutely_limit <= 0:
+            return configured_interval
+        min_interval = 60.0 / float(self.minutely_limit)
+        return max(configured_interval, min_interval + float(self.rate_limit_safety_seconds))
 
     def _rate_limit(self) -> None:
         elapsed = time.time() - self._last_request_at
@@ -47,13 +60,18 @@ class TwelveDataClient:
         last_error: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
+                import requests
+
                 self._rate_limit()
                 response = requests.get(self.base_url, params=params, timeout=30)
                 self._last_request_at = time.time()
                 response.raise_for_status()
                 payload = response.json()
                 if payload.get("status") == "error":
-                    raise RuntimeError(payload.get("message", f"Twelve Data error for {symbol}"))
+                    message = payload.get("message", f"Twelve Data error for {symbol}")
+                    if "limit" in str(message).lower() or "too many" in str(message).lower():
+                        time.sleep(self.request_interval_seconds * 2)
+                    raise RuntimeError(message)
                 values = payload.get("values", [])
                 if not values:
                     LOGGER.warning("%s: Twelve Data returned no rows", symbol)
