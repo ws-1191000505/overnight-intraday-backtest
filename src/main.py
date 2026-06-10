@@ -92,6 +92,8 @@ def process_market(
     start = args.start or market_cfg["default_start"]
 
     if args.quick:
+        raw_dir = "data/quick/raw"
+        processed_dir = "data/quick/processed"
         end_ts = pd.to_datetime(end)
         start = max(
             pd.to_datetime(start),
